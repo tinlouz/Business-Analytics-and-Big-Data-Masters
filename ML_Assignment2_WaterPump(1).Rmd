@@ -1,0 +1,550 @@
+---
+title: "Machine Learning 2nd Assignment"
+author: "Aksel, Dominik, Martin, Manuel"
+date: "10/03/2019"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# loading libraries and settting seed
+library(data.table)
+library(ggplot2)
+library(plyr)
+library(cowplot)
+library(dplyr)     # To compute the `union` of the levels.
+library(png)       # To include images in this document.
+library(knitr)     # To include images inline in this doc.
+library(moments)   # Skewness
+library(e1071)     # Alternative for Skewness
+library(glmnet)    # Lasso
+library(caret)     # To enable Lasso training with CV.
+library(Hmisc)
+library(corrplot)
+
+# ML libraries
+library(ltm)             # Need this library to compute the point-biserial
+library(pROC)            # This library makes handling ROC curves a lot easier.
+library(caret)
+library(ROCR)
+library(nnet)
+set.seed(4321)
+
+# random forest stuff libraries
+library(MASS)
+library(ISLR)
+library(tree)
+library(randomForest)
+library(gbm)
+library(caret)
+```
+
+
+<hr />
+
+#  Pump it Up: Data Mining the Water Table
+
+<hr />
+
+### Introduction
+In this second assignment we are going to help the Tanzanian Ministry of Water in providing water to their people. Our task is to predict which water pumps are going to continue working, which are going to need repairs and which are going to fail. 
+
+
+<hr />
+### Original Dataset
+<hr />
+
+
+##### Data Overview {.tabset .tabset-fade .tabset-pills}
+```{r}
+dataset <- read.csv("original_data.csv",na.strings = "")
+```
+
+###### Structure
+<hr />
+```{r}
+str(dataset)
+```
+
+###### First rows
+<hr />
+```{r}
+head(dataset,3)
+```
+###### Summary
+<hr />
+```{r}
+summary(dataset)
+```
+###### Variable Classes
+<hr />
+```{r}
+sapply(dataset, class)
+```
+
+<hr />
+
+### Data Cleaning
+
+<hr />
+
+```{r}
+#Checking Missing Values
+na.cols <- which(colSums(is.na(dataset)) > 0)
+paste('There are', length(na.cols), 'columns with missing values')
+sort(colSums(sapply(dataset[na.cols], is.na)), decreasing = TRUE)
+```
+
+<hr />
+
+#### Value Imputation {.tabset .tabset-fade .tabset-pills}
+
+##### Missing Values
+
+
+**Categorical variables**
+
+- *funder:*    4504  empty cells filled with 'Unknown'
+- *installer:* 4532  empty cells filled with 'Unknown'
+- *subvillage:* 470   empty cells filled with 'Unknown'
+- *public_meeting:* 4155 empty cells filled with 'True' (due to mode)
+- *scheme_management:* 4846 empty cells filled with 'Unknown'
+- *scheme_name:* 35258 empty cells filled with 'Unknown'
+- *permit:* 3793 empty cells filled with 'True'
+
+
+<hr />
+
+##### Spurious Values
+
+**Categorical variables**
+
+- *Funder:*     980  cells with 0s replaced with 'Unknown'
+- *Installer:*  980  cells with 0s replaced with 'Unknown'
+- *public_meeting:* 56066 cells with wrong spelling of 'true/false' corrected
+- *scheme_management:* 997 cells with 'Other' and 'None' replaced with 'Unknown'
+- *scheme_name:* 794 cells with 'None' replaced with 'Unknown'
+- *permit:* 56344 cells with wrong spelling of 'true/false' corrected 
+- *management_group:* 1209 cells with 'Other' replaced with 'Unknown'
+- *payment:* 1314 cells with 'Other' replaced with 'Unknown'
+- *source:* 261 cells with 'Other' replaced with 'Unknown'
+
+<hr />
+
+**Numerical variables**
+
+- *gps height:* 27530 cells with 0s replaced with median 364
+- *population:* 35616 cells with  0s and 1s replaced with median 181
+- *construction_year:* 25969 cells with 0s replaced with median 1986
+ 
+
+<hr />
+
+### Data Preparation
+```{r}
+dataset_prepared <- read.csv("data_prepared.csv",na.strings = "")
+na.cols <- which(colSums(is.na(dataset_prepared)) > 0)
+paste('There are', length(na.cols), 'columns with missing values') 
+
+#adjust variable types and remove "split" column
+dataset_prepared$split <- NULL
+dataset_prepared$date_recorded <- as.Date(dataset_prepared$date_recorded)
+dataset_prepared$construction_year <- as.factor(dataset_prepared$construction_year)
+dataset_prepared$construction_year_new <- as.factor(dataset_prepared$construction_year_new)
+dataset_prepared$construction_year_binary <- as.factor(dataset_prepared$construction_year_binary)
+dataset_prepared$scheme_name_binary <- as.factor(dataset_prepared$scheme_name_binary)
+dataset_prepared$quantity_binary <- as.factor(dataset_prepared$quantity_binary)
+dataset_prepared$region_code <- as.factor(dataset_prepared$region_code)
+dataset_prepared$district_code <- as.factor(dataset_prepared$district_code)
+
+#remove "Recorded By" as it has only one value
+dataset_prepared$recorded_by <- NULL
+
+```
+<hr />
+### EDA
+Explain strategy
+
+#### Exploratory Data Analysis {.tabset .tabset-fade .tabset-pills}
+```{r, echo=FALSE}
+numeric_variables <- names(dataset_prepared)[which(sapply(dataset_prepared, is.numeric))]
+categorical_variables <- names(dataset_prepared)[which(sapply(dataset_prepared, is.factor))]
+
+dataset_num <- dataset_prepared[,numeric_variables]
+dataset_cat <- dataset_prepared[categorical_variables]
+
+dataset_prepared <- as.data.table(dataset_prepared)
+```
+
+<hr />
+##### Target Variable Distribution
+
+```{r}
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(status_group)) + geom_bar() + labs(title="Status of Current Water Pumps")
+```
+<hr />
+##### Bar Plots for Categorical Variables
+
+```{r, echo=FALSE}
+barcols <- c("funder_new", "installer_new","basin","region","public_meeting","scheme_management","permit","construction_year_new","extraction_type_group","management_group","payment","payment_type","water_quality","quantity","source","waterpoint_type_group")
+for(variable in barcols){
+  counts <- table(dataset_cat[,variable])
+  barplot(counts, main = variable)
+}
+```
+
+<hr />
+##### Histograms for Numerical Variables
+
+```{r, echo=FALSE}
+hist(dataset_prepared$population, main="Population")
+```
+<hr />
+##### Water Pump Status by Variables of Interest
+
+```{r, echo=FALSE}
+# Population vs Status Group
+ggplot(dataset_prepared, aes(status_group, population)) + geom_violin()
+
+#check for outliers in Population
+out <- boxplot.stats(dataset_prepared$population, coef = 6)$out
+print(length(out)) #there are many values considered outliers
+
+dataset_prepared[,.(average_pop = mean(population)), by="status_group"]
+#however, the average population doesn't seem to change with the status of the pump
+
+#Let's check Status of Pump vs potential relevant categorical variables
+#Funder (top 15 except "Others")
+top_funders <- names(table(dataset_prepared$funder_new)[order(table(dataset_prepared$funder_new),decreasing = T)][c(2:16)])
+ggplot(dataset_prepared[dataset_prepared$funder_new %in% top_funders & !is.na(dataset_prepared$status_group),], aes(x=funder_new, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Funder")
+#Installer
+top_inst <- names(table(dataset_prepared$installer_new)[order(table(dataset_prepared$installer_new),decreasing = T)][c(2:16)])
+ggplot(dataset_prepared[dataset_prepared$installer_new %in% top_inst & !is.na(dataset_prepared$status_group),], aes(x=installer_new, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Installer")
+#Basin
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=basin, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Basin")
+#Region
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=region, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Region")
+#Public Meeting
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=public_meeting, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps if Public Meeting was Held")
+
+#Scheme Management
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=scheme_management, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Scheme Management")
+
+#Permit
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=permit, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps with/without Permit")
+#Construction Year
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=construction_year_new, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Construction year")
+#Extraction Type Class
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=extraction_type_class, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Extraction Type")
+#Management
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=management, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Manager")
+#Payment Type
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=payment_type, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Payment Type")
+#Water Quality
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=water_quality, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Water Quality")
+#Quantity
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=quantity, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Water Quantity")
+#Source
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=source, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Water Source")
+#Waterpoint type
+ggplot(dataset_prepared[!is.na(dataset_prepared$status_group),], aes(x=waterpoint_type, y=1, fill=status_group)) + geom_bar(stat="identity", position="fill") + theme(axis.text.x = element_text(angle = 90, hjust = 1))+ scale_fill_hue(h.start = 110) +labs(title="Status of Current Water Pumps by Waterpoint Type")
+```
+<hr />
+##### Geogaraphic Analysis
+
+```{r, echo=FALSE}
+p1 = ggplot(dataset_prepared[dataset_prepared$latitude != 0 & dataset_prepared$longitude != 0,], aes(x = longitude, y = latitude, color = gps_height)) + geom_point()
+p2 = ggplot(dataset_prepared[dataset_prepared$latitude != 0 & dataset_prepared$longitude != 0 & !is.na(dataset_prepared$status_group),], aes(x = longitude, y = latitude, color = status_group)) + geom_point()+ scale_fill_hue(h.start = 110)
+p1
+p2  
+```
+
+### Feature Creation
+```{r}
+#age: date_recorded minus construction year
+dataset_prepared$age<- as.numeric(format(dataset_prepared$date_recorded, "%Y")) - as.numeric(dataset_prepared$construction_year_new) - 1960
+
+```
+
+```{r}
+library(geosphere)
+
+dataset_prepared_distance <- distGeo(as.matrix(dataset_prepared[,c('longitude','latitude')]), c(0,0))
+dataset_prepared$longitude
+
+dataset_prepared$distance <- dataset_prepared_distance
+```
+
+### Feature Selection
+
+Formula for the variables identified as realistic
+```{r}
+formula <- formula(status_group ~ amount_tsh + funder_new + gps_height_new + installer_new + basin + region + district_code + population + public_meeting + scheme_management + scheme_name_binary + permit + construction_year_binary + extraction_type + extraction_type_group + extraction_type_class + management + management_group + payment + payment_type + water_quality + quality_group + quantity + quantity_binary + quantity_group + source + source_type + source_class + waterpoint_type + waterpoint_type_group + age + distance)
+```
+
+lets search for columns that have too many level (more than 32)
+```{r}
+sapply(dataset_prepared, function(x){length(table(x))})
+```
+
+```{r}
+factors_to_keep <- names(table(dataset_prepared[,"funder_new"])[order(table(dataset_prepared[,"funder_new"]),decreasing = TRUE)][1:31])
+dataset_prepared[!(dataset_prepared$funder_new %in% factors_to_keep),"funder_new"] <- "Others"
+dataset_prepared$funder_new<-droplevels(dataset_prepared$funder_new)
+```
+
+```{r}
+factors_to_keep <- names(table(dataset_prepared[,"installer_new"])[order(table(dataset_prepared[,"installer_new"]),decreasing = TRUE)][1:31])
+dataset_prepared[!(dataset_prepared$installer_new %in% factors_to_keep),"installer_new"] <- "Others"
+dataset_prepared$installer_new<-droplevels(dataset_prepared$installer_new)
+
+```
+
+
+
+
+
+### Train, Validation Spliting
+
+Our usual function to split the data in train and test data:
+```{r, echo=FALSE}
+df <- dataset_prepared[!is.na(dataset_prepared$status_group),]
+
+splitdf <- function(dataframe, seed=NULL, percentage=0.8) {
+  if (!is.null(seed)) set.seed(seed)
+  index <- 1:nrow(dataframe)
+  numTrainingSamples <- round(length(index) * percentage)
+  trainindex <- sample(index, numTrainingSamples)
+  trainset <- dataframe[trainindex, ]
+  testset <- dataframe[-trainindex, ]
+  list(trainset=trainset,testset=testset)
+}
+```
+
+
+
+
+
+# Linear Model
+
+Splitting in train/validation and test set (don't need this most probably). 
+```{r}
+split1 <- splitdf(df, i, 0.6)
+split1 <- easyFeatureSelection(split1)
+split2 <- splitdf(split1$testset, i*100, 0.5)
+```
+
+A easy way to do feature selection (if we want to do like this):
+```{r}
+easyFeatureSelection <- function(split) {
+  corrs <- abs(cor(split$trainset)[1,])
+  toKeep <- corrs[corrs > 0.1 & !is.na(corrs)]
+  split$trainset <- subset(split$trainset, select=names(toKeep))
+  split$testset <- subset(split$testset, select=names(toKeep))
+  split
+}
+```
+
+Function to get optimal threshold
+```{r}
+getOptimalThreshold <- function(scores, labels) {
+  preds = prediction(scores, labels)
+  perf = performance(preds, "acc")
+  ind = which.max(slot(perf, "y.values")[[1]] )
+  acc = slot(perf, "y.values")[[1]][ind]
+  optimalThreshold = slot(perf, "x.values")[[1]][ind]
+  optimalThreshold
+}
+```
+
+
+Crossfold
+```{r}
+cv.modelEvaluation.acc <- function(trainset, cvset, testset) {
+  # Train the model with trainset
+  model <- multinom(status_group~., data = trainset)
+  # Obtain the optimal THRESHOLD with cross validation set (cvset)
+  probs = predict(model, type="response", newdata = cvset)
+  cv.predictions <- data.frame(status_group = cvset$status_group, pred=probs)
+  optimalThreshold <- getOptimalThreshold(probs, cvset$status_group)
+  # Compute performance with test set.
+  test.predictions <- data.frame(status_group = testset$status_group, 
+                                 pred=predict(model, type="response", newdata = testset))
+  T <- table(test.predictions$status_group, test.predictions$pred > optimalThreshold)
+  acc <- (2*(T[1,1]))/((2*(T[1,1]))+T[2,1]+T[1,2])
+  acc
+}
+```
+
+Loop to iterate over splits with different seed.
+```{r}
+numIterations<-10
+#df <- readData()
+cv.perf.acc = c(0.0)
+for(i in 1:numIterations) {
+  split1 <- splitdf(df, i, 0.6)
+  #split1 <- easyFeatureSelection(split1)
+  split2 <- splitdf(split1$testset, i*100, 0.5)
+  cv.perf.acc[i] <- cv.modelEvaluation.acc(split1$trainset, split2$trainset, split2$testset)
+}
+indexOfMaxPerformance = which.max(cv.perf.acc)
+maxPerf = cv.perf.acc[indexOfMaxPerformance]
+cat("Max performance = ", maxPerf)
+```
+
+# Tree Models
+
+## Simple
+
+Lets split the dataset and create a nice tree
+```{r}
+formula1 <- Formula(status_group ~ distance + age + installer_new)
+train <- sample(1:nrow(df), nrow(df)/2)
+test <- df[-train,]
+
+tree.pump <- tree(formula = formula1, df, subset=train)
+summary(tree.pump)
+```
+
+We now plot the nice tree.
+```{r}
+plot(tree.pump)
+text(tree.pump ,pretty=0)
+```
+
+```{r}
+plot(oj.tree); text(oj.tree, cex=0.75)
+```
+
+we predict with the nice tree
+```{r}
+preds=predict(tree.boston, newdata=test)
+
+T <- table(test$status_group, preds)
+acc <- (2*(T[1,1]))/((2*(T[1,1]))+T[2,1]+T[1,2])
+acc
+```
+
+
+## Random Forest
+dooo a random forest, yayyy
+```{r}
+formula1 <- Formula(status_group ~ distance + age + installer_new)
+
+train <- sample(1:nrow(df), nrow(df)/2)
+test <- df[-train,]
+
+set.seed (1)
+rf.pump=randomForest(formula = formula, data=df, mtry=13, importance=TRUE)
+rf.pump
+```
+
+predict with the random forest
+```{r}
+final <- dataset_prepared[is.na(dataset_prepared$status_group),]
+preds=predict(rf.pump, newdata=final)
+
+submission <- data.frame(id=final$id, status_group = preds)
+write.csv(submission, file="sub.csv", row.names=FALSE)
+
+
+
+```
+
+```{r}
+importance(rf.pump)
+```
+
+```{r}
+varImpPlot (rf.pump)
+```
+
+## Boosting
+```{r}
+boost.pump=gbm(status_group~.,data=train,distribution="gaussian",n.trees=5000,interaction.depth=4)
+summary(boost.boston)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(boost.pump,i="rm")
+plot(boost.pump,i="lstat")
+```
+
+
+```{r}
+preds=predict(boost.pump,newdata=test,n.trees=5000)
+
+T <- table(test$status_group, preds)
+acc <- (2*(T[1,1]))/((2*(T[1,1]))+T[2,1]+T[1,2])
+acc
+```
+
+## XGBoost
+lets bost the xg out of this!!
+```{r}
+dtrain <- xgb.DMatrix(data = as.matrix(train[!names(train) %in% c("status_group")]), label = train$status_group)
+xgboost.pump <- xgboost(data = dtrain, max_depth=3, eta = 0.1, nthread=3, nrounds=40, lambda=0, objective="reg:linear")
+```
+
+and predict
+```{r}
+dtest <- as.matrix(test[!names(train) %in% c("status_group")])
+preds <- predict(xgboost.pump, dtest)
+
+T <- table(test$status_group, preds)
+acc <- (2*(T[1,1]))/((2*(T[1,1]))+T[2,1]+T[1,2])
+acc
+```
+
+use `caret` to train a set of XGBoost trees using a grid of parameters to obtain the optimal configuration
+```{r}
+param_grid <- expand.grid(
+  nrounds = seq(0,250, 5),
+  eta = c(0.01, 0.05, 0.1),
+  subsample = c(0.5,1.0),
+  colsample_bytree = c(0.5,1.0),
+  max_depth = c(3,4,5),
+  gamma = seq(0,1,0.1),
+  min_child_weight = 1
+)
+
+xgb_control <- trainControl(
+  method="cv",
+  number = 5
+)
+
+set.seed(1)
+pump.xgb.tuned <- train(status_group~., data=train, trControl=xgb_control, tuneGrid=param_grid,lambda=0, method="xgbTree")
+
+
+```
+
+best params
+```{r}
+boston.xgb.tuned$bestTune
+
+```
+
+aaaaand predict
+```{r}
+preds <- predict(pump.xgb.tuned$finalModel,newdata=dtest)
+
+T <- table(test$status_group, preds)
+acc <- (2*(T[1,1]))/((2*(T[1,1]))+T[2,1]+T[1,2])
+acc
+
+```
+
+
+
+
+
+### Final Submission
+
+### Conclusion
+
+* 
